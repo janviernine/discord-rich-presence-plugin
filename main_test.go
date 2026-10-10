@@ -142,6 +142,7 @@ var _ = Describe("discordPlugin", func() {
 			pdk.PDKMock.On("GetConfig", caaEnabledKey).Return("", false)
 			pdk.PDKMock.On("GetConfig", activityNameKey).Return("", false)
 			pdk.PDKMock.On("GetConfig", spotifyLinksKey).Return("", false)
+			pdk.PDKMock.On("GetConfig", clearOnPauseKey).Return("", false)
 		}
 
 		setupImageMocks := func() {
@@ -219,7 +220,7 @@ var _ = Describe("discordPlugin", func() {
 			})
 		})
 
-		Context("paused state", func() {
+		Context("paused state with clearonpause disabled", func() {
 			It("sends activity with frozen timestamps and pause icon overlay", func() {
 				setupConfigMocks()
 				setupConnectMocks()
@@ -240,7 +241,7 @@ var _ = Describe("discordPlugin", func() {
 			})
 		})
 
-		Context("artist display (Feishin style)", func() {
+	Context("artist display (Feishin style)", func() {
 		It("uses comma-joined Artists for the state line when present", func() {
 			setupConfigMocks()
 			setupConnectMocks()
@@ -279,7 +280,26 @@ var _ = Describe("discordPlugin", func() {
 		})
 	})
 
-	Context("stopped state", func() {
+	Context("paused state with clearonpause enabled", func() {
+			It("clears activity", func() {
+				pdk.PDKMock.On("GetConfig", clearOnPauseKey).Return("true", true)
+				setupConfigMocks()
+				setupConnectMocks()
+
+				var sentPayload string
+				host.WebSocketMock.On("SendText", "testuser", mock.Anything).Run(func(args mock.Arguments) {
+					sentPayload = args.Get(1).(string)
+				}).Return(nil)
+
+				err := plugin.PlaybackReport(baseRequest("paused"))
+				Expect(err).ToNot(HaveOccurred())
+
+				Expect(sentPayload).To(ContainSubstring(`"op":3`))
+				Expect(sentPayload).To(ContainSubstring(`"activities":null`))
+			})
+		})
+
+		Context("stopped state", func() {
 			It("clears activity and disconnects", func() {
 				host.WebSocketMock.On("SendText", "testuser", mock.MatchedBy(func(msg string) bool {
 					return strings.Contains(msg, `"op":3`) && strings.Contains(msg, `"activities":null`)
@@ -313,6 +333,7 @@ var _ = Describe("discordPlugin", func() {
 				pdk.PDKMock.On("GetConfig", caaEnabledKey).Return("", false)
 				pdk.PDKMock.On("GetConfig", activityNameKey).Return(configValue, configExists)
 				pdk.PDKMock.On("GetConfig", spotifyLinksKey).Return("", false)
+				pdk.PDKMock.On("GetConfig", clearOnPauseKey).Return("", false)
 
 				setupConnectMocks()
 				setupImageMocks()
@@ -343,6 +364,7 @@ var _ = Describe("discordPlugin", func() {
 				pdk.PDKMock.On("GetConfig", activityNameKey).Return("Custom", true)
 				pdk.PDKMock.On("GetConfig", activityNameTemplateKey).Return(template, templateExists)
 				pdk.PDKMock.On("GetConfig", spotifyLinksKey).Return("", false)
+				pdk.PDKMock.On("GetConfig", clearOnPauseKey).Return("", false)
 
 				setupConnectMocks()
 				setupImageMocks()
