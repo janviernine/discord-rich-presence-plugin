@@ -240,7 +240,46 @@ var _ = Describe("discordPlugin", func() {
 			})
 		})
 
-		Context("stopped state", func() {
+		Context("artist display (Feishin style)", func() {
+		It("uses comma-joined Artists for the state line when present", func() {
+			setupConfigMocks()
+			setupConnectMocks()
+			setupImageMocks()
+
+			var sentPayload string
+			host.WebSocketMock.On("SendText", "testuser", mock.Anything).Run(func(args mock.Arguments) {
+				sentPayload = args.Get(1).(string)
+			}).Return(nil)
+
+			req := baseRequest("playing")
+			req.Track.Artist = "Pop Smoke feat. Lil Tjay"
+			req.Track.Artists = []scrobbler.ArtistRef{{Name: "Pop Smoke"}, {Name: "Lil Tjay"}}
+
+			err := plugin.PlaybackReport(req)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(sentPayload).To(ContainSubstring(`"state":"Pop Smoke, Lil Tjay"`))
+		})
+
+		It("falls back to the raw Artist tag when Artists is empty", func() {
+			setupConfigMocks()
+			setupConnectMocks()
+			setupImageMocks()
+
+			var sentPayload string
+			host.WebSocketMock.On("SendText", "testuser", mock.Anything).Run(func(args mock.Arguments) {
+				sentPayload = args.Get(1).(string)
+			}).Return(nil)
+
+			req := baseRequest("playing")
+			req.Track.Artist = "Pop Smoke feat. Lil Tjay"
+
+			err := plugin.PlaybackReport(req)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(sentPayload).To(ContainSubstring(`"state":"Pop Smoke feat. Lil Tjay"`))
+		})
+	})
+
+	Context("stopped state", func() {
 			It("clears activity and disconnects", func() {
 				host.WebSocketMock.On("SendText", "testuser", mock.MatchedBy(func(msg string) bool {
 					return strings.Contains(msg, `"op":3`) && strings.Contains(msg, `"activities":null`)
@@ -326,10 +365,10 @@ var _ = Describe("discordPlugin", func() {
 			Entry("uses custom template with only album", "{album}", true, nil, "Test Album"),
 			Entry("uses custom template with plain text", "Now Playing", true, nil, "Now Playing"),
 			Entry("falls back to Navidrome when template is empty", "", false, nil, "Navidrome"),
-			Entry("renders {artists} joined with bullet for multiple artists",
+			Entry("renders {artists} joined with comma for multiple artists",
 				"{artists}", true,
 				[]scrobbler.ArtistRef{{Name: "Borgore"}, {Name: "Miley Cyrus"}},
-				"Borgore • Miley Cyrus"),
+				"Borgore, Miley Cyrus"),
 			Entry("renders {artists} as single name when only one artist",
 				"{artists}", true,
 				[]scrobbler.ArtistRef{{Name: "Solo Artist"}},
@@ -341,7 +380,7 @@ var _ = Describe("discordPlugin", func() {
 			Entry("combines {artists} with other placeholders",
 				"{artists} - {track}", true,
 				[]scrobbler.ArtistRef{{Name: "A"}, {Name: "B"}},
-				"A • B - Test Song"),
+				"A, B - Test Song"),
 		)
 	})
 

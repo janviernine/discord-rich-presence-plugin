@@ -212,7 +212,7 @@ func (p *discordPlugin) handlePlayingOrPaused(input scrobbler.PlaybackReportRequ
 		Type:              2,
 		Details:           input.Track.Title,
 		DetailsURL:        spotifyURL,
-		State:             input.Track.Artist,
+		State:             displayArtists(input.Track),
 		StateURL:          artistSearchURL,
 		StatusDisplayType: statusDisplayType,
 		Timestamps:        ts,
@@ -255,6 +255,18 @@ func connectUser(username string) (clientID, token string, err error) {
 	return clientID, token, nil
 }
 
+// displayArtists returns the track artists as "Artist1, Artist2", matching Feishin's Discord presence. It prefers Navidrome's structured Artists list (split from "feat."/"ft." tags at scan time) and falls back to the raw Artist tag when the list is empty.
+func displayArtists(track scrobbler.TrackInfo) string {
+	if len(track.Artists) == 0 {
+		return track.Artist
+	}
+	names := make([]string, len(track.Artists))
+	for i, a := range track.Artists {
+		names[i] = a.Name
+	}
+	return strings.Join(names, ", ")
+}
+
 func resolveActivityName(track scrobbler.TrackInfo) (string, int) {
 	activityNameOption, _ := pdk.GetConfig(activityNameKey)
 	switch activityNameOption {
@@ -263,18 +275,11 @@ func resolveActivityName(track scrobbler.TrackInfo) (string, int) {
 	case activityNameAlbum:
 		return track.Album, statusDisplayName
 	case activityNameArtist:
-		return track.Artist, statusDisplayName
+		return displayArtists(track), statusDisplayName
 	case activityNameCustom:
 		template, _ := pdk.GetConfig(activityNameTemplateKey)
 		if template != "" {
-			artists := track.Artist
-			if len(track.Artists) > 0 {
-				names := make([]string, len(track.Artists))
-				for i, a := range track.Artists {
-					names[i] = a.Name
-				}
-				artists = strings.Join(names, " • ")
-			}
+			artists := displayArtists(track)
 			r := strings.NewReplacer(
 				"{track}", track.Title,
 				"{artist}", track.Artist,
