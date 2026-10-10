@@ -133,6 +133,8 @@ var _ = Describe("discordPlugin", func() {
 				return strings.Contains(url, "gateway.discord.gg")
 			}), mock.Anything, "testuser").Return("testuser", nil)
 			host.SchedulerMock.On("ScheduleRecurring", mock.Anything, payloadHeartbeat, "testuser").Return("testuser", nil)
+			host.CacheMock.On("GetString", "discord.anchor.testuser").Return("", false, errors.New("not found"))
+			host.CacheMock.On("SetString", "discord.anchor.testuser", mock.Anything, mock.Anything).Return(nil)
 		}
 
 		setupConfigMocks := func() {
@@ -170,6 +172,7 @@ var _ = Describe("discordPlugin", func() {
 			It("returns not authorized error when user not in config", func() {
 				pdk.PDKMock.On("GetConfig", clientIDKey).Return("test-client-id", true)
 				pdk.PDKMock.On("GetConfig", usersKey).Return(`[{"username":"otheruser","token":"token"}]`, true)
+				host.CacheMock.On("GetString", "discord.anchor.testuser").Return("", false, errors.New("not found"))
 
 				err := plugin.PlaybackReport(baseRequest("playing"))
 				Expect(err).To(HaveOccurred())
@@ -299,8 +302,140 @@ var _ = Describe("discordPlugin", func() {
 			})
 		})
 
+		Context("presence clock anchor and stale-report guards", func() {
+			It("reuses the original clock for same-track reports with stale positions", func() {
+				host.CacheMock.On("GetString", "discord.anchor.testuser").Return("", false, errors.New("not found")).Once()
+				host.CacheMock.On("GetString", "discord.anchor.testuser").Return(`{"trackId":"track1","startMs":1714599990000,"endMs":1714600170000,"lastTs":1714600000,"paused":false,"pauseTs":0}`, true, nil).Once()
+				setupConfigMocks()
+				setupConnectMocks()
+				setupImageMocks()
+
+				var payloads []string
+				host.WebSocketMock.On("SendText", "testuser", mock.Anything).Run(func(args mock.Arguments) {
+					if msg := args.Get(1).(string); len(msg) > 0 && strings.Contains(msg, `"op":3`) {
+					payloads = append(payloads, msg)
+				}
+				}).Return(nil)
+
+				err := plugin.PlaybackReport(baseRequest("playing"))
+				Expect(err).ToNot(HaveOccurred())
+
+				stale := baseRequest("playing")
+				stale.Timestamp = 1714600060
+				stale.PositionMs = 0
+				err = plugin.PlaybackReport(stale)
+				Expect(err).ToNot(HaveOccurred())
+
+				Expect(payloads).To(HaveLen(2))
+				Expect(payloads[0]).To(ContainSubstring(`"start":1714599990000`))
+				// Without the anchor the stale report would re-anchor at 1714600060000
+				Expect(payloads[1]).To(ContainSubstring(`"start":1714599990000`))
+			})
+
+			It("drops playing reports for a track superseded by a newer one", func() {
+				host.CacheMock.On("GetString", "discord.anchor.testuser").Return("", false, errors.New("not found")).Once()
+				host.CacheMock.On("GetString", "discord.anchor.testuser").Return(`{"trackId":"track1","startMs":1714599990000,"endMs":1714600170000,"lastTs":1714600000,"paused":false,"pauseTs":0}`, true, nil).Once()
+				setupConfigMocks()
+				setupConnectMocks()
+				setupImageMocks()
+
+				var payloads []string
+				host.WebSocketMock.On("SendText", "testuser", mock.Anything).Run(func(args mock.Arguments) {
+					if msg := args.Get(1).(string); len(msg) > 0 && strings.Contains(msg, `"op":3`) {
+					payloads = append(payloads, msg)
+				}
+				}).Return(nil)
+
+				reqA := baseRequest("playing")
+				reqA.Track.Title = "Track A"
+				err := plugin.PlaybackReport(reqA)
+				Expect(err).ToNot(HaveOccurred())
+
+				late := baseRequest("playing")
+				late.Track.ID = "id-b"
+				late.Track.Title = "Track B"
+				late.Timestamp = 1714599990
+				err = plugin.PlaybackReport(late)
+				Expect(err).ToNot(HaveOccurred())
+
+				Expect(payloads).To(HaveLen(1))
+				Expect(payloads[0]).To(ContainSubstring(`"details":"Track A"`))
+			})
+
+			It("ignores stops for a track that is no longer shown", func() {
+				host.CacheMock.On("GetString", "discord.anchor.testuser").Return("", false, errors.New("not found")).Once()
+				host.CacheMock.On("GetString", "discord.anchor.testuser").Return(`{"trackId":"track1","startMs":1714599990000,"endMs":1714600170000,"lastTs":1714600000,"paused":false,"pauseTs":0}`, true, nil).Once()
+				setupConfigMocks()
+				setupConnectMocks()
+				setupImageMocks()
+
+				var payloads []string
+				host.WebSocketMock.On("SendText", "testuser", mock.Anything).Run(func(args mock.Arguments) {
+					if msg := args.Get(1).(string); len(msg) > 0 && strings.Contains(msg, `"op":3`) {
+					payloads = append(payloads, msg)
+				}
+				}).Return(nil)
+
+				reqA := baseRequest("playing")
+				reqA.Track.Title = "Track A"
+				err := plugin.PlaybackReport(reqA)
+				Expect(err).ToNot(HaveOccurred())
+
+				lateStop := baseRequest("stopped")
+				lateStop.Track.ID = "id-b"
+				lateStop.Track.Title = "Track B"
+				lateStop.Timestamp = 1714600005
+				err = plugin.PlaybackReport(lateStop)
+				Expect(err).ToNot(HaveOccurred())
+
+				Expect(payloads).To(HaveLen(1))
+				for _, p := range payloads {
+					Expect(p).ToNot(ContainSubstring(`"activities":null`))
+				}
+			})
+
+			It("shifts the clock by the paused duration on resume", func() {
+				host.CacheMock.On("GetString", "discord.anchor.testuser").Return("", false, errors.New("not found")).Once()
+				host.CacheMock.On("GetString", "discord.anchor.testuser").Return(`{"trackId":"track1","startMs":1714599990000,"endMs":1714600170000,"lastTs":1714600000,"paused":false,"pauseTs":0}`, true, nil).Once()
+				host.CacheMock.On("GetString", "discord.anchor.testuser").Return(`{"trackId":"track1","startMs":1714599990000,"endMs":1714600170000,"lastTs":1714600030,"paused":true,"pauseTs":1714600030}`, true, nil).Once()
+				setupConfigMocks()
+				setupConnectMocks()
+				setupImageMocks()
+
+				var payloads []string
+				host.WebSocketMock.On("SendText", "testuser", mock.Anything).Run(func(args mock.Arguments) {
+					if msg := args.Get(1).(string); len(msg) > 0 && strings.Contains(msg, `"op":3`) {
+					payloads = append(payloads, msg)
+				}
+				}).Return(nil)
+
+				err := plugin.PlaybackReport(baseRequest("playing"))
+				Expect(err).ToNot(HaveOccurred())
+
+				pausedReq := baseRequest("paused")
+				pausedReq.Timestamp = 1714600030
+				err = plugin.PlaybackReport(pausedReq)
+				Expect(err).ToNot(HaveOccurred())
+
+				resumed := baseRequest("playing")
+				resumed.Timestamp = 1714600090
+				resumed.PositionMs = 0
+				err = plugin.PlaybackReport(resumed)
+				Expect(err).ToNot(HaveOccurred())
+
+				Expect(payloads).To(HaveLen(3))
+				Expect(payloads[0]).To(ContainSubstring(`"start":1714599990000`))
+				Expect(payloads[1]).To(ContainSubstring(`"start":1714600030000`))
+				Expect(payloads[1]).ToNot(ContainSubstring(`"end":`))
+				// Paused 60s: clock shifts by 60000ms, not by the stale zero position
+				Expect(payloads[2]).To(ContainSubstring(`"start":1714600050000`))
+			})
+		})
+
 		Context("stopped state", func() {
 			It("clears activity and disconnects", func() {
+				host.CacheMock.On("GetString", "discord.anchor.testuser").Return("", false, errors.New("not found"))
+				host.CacheMock.On("Remove", "discord.anchor.testuser").Return(nil)
 				host.WebSocketMock.On("SendText", "testuser", mock.MatchedBy(func(msg string) bool {
 					return strings.Contains(msg, `"op":3`) && strings.Contains(msg, `"activities":null`)
 				})).Return(nil)
@@ -314,6 +449,8 @@ var _ = Describe("discordPlugin", func() {
 
 		Context("expired state", func() {
 			It("clears activity and disconnects (same as stopped)", func() {
+				host.CacheMock.On("GetString", "discord.anchor.testuser").Return("", false, errors.New("not found"))
+				host.CacheMock.On("Remove", "discord.anchor.testuser").Return(nil)
 				host.WebSocketMock.On("SendText", "testuser", mock.MatchedBy(func(msg string) bool {
 					return strings.Contains(msg, `"op":3`) && strings.Contains(msg, `"activities":null`)
 				})).Return(nil)

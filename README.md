@@ -135,7 +135,7 @@ Access the plugin configuration in Navidrome: **Settings > Plugins > Discord Ric
   - **Default**: Shows "Navidrome" (static app name)
   - **Track**: Shows the currently playing track title
   - **Album**: Shows the currently playing track's album name
-  - **Artist**: Shows the currently playing track's artist name
+  - **Artist**: Shows the currently playing track's artist name (multiple artists joined as "Artist1, Artist2", matching Feishin)
   - **Custom**: Uses a template string with placeholders (see **Custom Activity Name Template** below)
 
 #### Custom Activity Name Template
@@ -204,6 +204,8 @@ The plugin implements three Navidrome capabilities:
 6. **Playback paused** — If `clearOnPause` is disabled, `PlaybackReport` with state `paused` updates presence with pause icon and "paused for" timer. If `clearOnPause` is enabled, presence is cleared.
 7. **Playback resumed** — `PlaybackReport` with state `playing` restores running timestamps
 8. **Playback stopped** — `PlaybackReport` with state `stopped` or `expired` clears presence and disconnects
+9. **Presence clock anchor** — The first report for a track anchors the start/end timestamps in the host cache. Repeat reports for the same track reuse the anchor (immune to stale/zero mid-track positions); a resume shifts the anchor by the paused duration instead of trusting the reported position.
+10. **Stale-report guards** — Playing/paused reports for a track superseded by a newer one are dropped, and late stops for a non-shown track are ignored, so out-of-order reports can't flash over or blank the current presence.
 
 ### Stateless Design
 
